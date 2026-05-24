@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         微博原图下载器
 // @namespace    https://github.com/sun27/weibo-image-downloader
-// @version      5.2.0
+// @version      5.3.0
 // @description  在微博网页版选中特定贴文，一键下载其原图（支持长文展开、滚动自动发现）
 // @author       You
 // @match        https://weibo.com/*
@@ -198,9 +198,25 @@
   }
 
   // ---- 下载逻辑 ----
+
+  // 生成回退 URL（原图 → large → mw690）
+  function getFallbackUrls(originalUrl) {
+    var urls = [originalUrl];
+    var re = /^(https?:\/\/[^/]+\.sinaimg\.cn\/)([^/]+)(\/[^?]+)/i;
+    var m = originalUrl.match(re);
+    if (!m) return urls;
+    var fallbacks = ['large', 'mw690'];
+    for (var f = 0; f < fallbacks.length; f++) {
+      if (m[2] !== fallbacks[f]) {
+        urls.push(m[1] + fallbacks[f] + m[3]);
+      }
+    }
+    return urls;
+  }
+
   function downloadWithGM(imgInfo) {
     return new Promise(function (resolve) {
-      var url = imgInfo.original;
+      var url = imgInfo.url || imgInfo.original;
       GM_xmlhttpRequest({
         method: 'GET',
         url: url,
@@ -244,17 +260,69 @@
   }
 
   async function downloadImages(images) {
+    var MAX_ROUNDS = 3;
+    var pending = images.slice(); // 复制一份，后续会修改
     var success = 0;
     var fail = 0;
-    for (var j = 0; j < images.length; j++) {
-      images[j].index = j + 1;
-      images[j].total = images.length;
-      log('--- [' + (j + 1) + '/' + images.length + '] ---');
-      log('  ' + images[j].original.substring(0, 90));
-      var result = await downloadWithGM(images[j]);
-      if (result === 'success') success++;
-      else fail++;
-      await sleep(800);
+    var globalIndex = 0;
+
+    // 为每张图片初始化回退 URL 列表
+    pending.forEach(function (img) {
+      img.fallbackUrls = getFallbackUrls(img.original);
+      img.fallbackIdx = 0;
+      img.url = img.fallbackUrls[0];
+      img.retryCount = 0;
+    });
+
+    for (var round = 1; round <= MAX_ROUNDS; round++) {
+      if (pending.length === 0) break;
+
+      if (round === 1) {
+        log('===== 第 1 轮下载 (' + pending.length + ' 张) =====');
+      } else {
+        log('===== 第 ' + round + ' 轮重试 (' + pending.length + ' 张，降低画质) =====', 'highlight');
+      }
+
+      var stillPending = [];
+      for (var j = 0; j < pending.length; j++) {
+        var img = pending[j];
+        globalIndex++;
+        img.index = globalIndex;
+        img.total = images.length;
+        img.retryCount++;
+
+        var qualityLabel = img.fallbackIdx === 0 ? 'original' : img.fallbackIdx === 1 ? 'large' : 'mw690';
+        log('--- [' + img.index + '/' + img.total + ']' + (img.retryCount > 1 ? ' 重试#' + img.retryCount + ' [' + qualityLabel + ']' : ''));
+        log('  ' + img.url.substring(0, 90));
+
+        var result = await downloadWithGM(img);
+        if (result === 'success') {
+          success++;
+          log('  下载成功 [' + qualityLabel + ']', 'success');
+        } else {
+          // 尝试下一个回退 URL
+          img.fallbackIdx++;
+          if (img.fallbackIdx < img.fallbackUrls.length) {
+            img.url = img.fallbackUrls[img.fallbackIdx];
+            stillPending.push(img);
+            log('  失败，将用 [' + (img.fallbackIdx === 1 ? 'large' : 'mw690') + '] 重试', 'error');
+          } else {
+            fail++;
+            log('  最终失败 — 所有画质级别均不可用', 'error');
+          }
+        }
+        await sleep(600);
+      }
+
+      pending = stillPending;
+      if (pending.length > 0 && round < MAX_ROUNDS) {
+        log('等待 2 秒后开始下一轮重试...');
+        await sleep(2000);
+      }
+    }
+
+    if (fail > 0) {
+      log(fail + ' 张图片下载失败（已尝试 original/large/mw690）', 'error');
     }
     return { success: success, fail: fail };
   }
