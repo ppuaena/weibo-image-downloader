@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         微博原图下载器
 // @namespace    https://github.com/sun27/weibo-image-downloader
-// @version      5.1.0
+// @version      5.2.0
 // @description  在微博网页版选中特定贴文，一键下载其原图（支持长文展开、滚动自动发现）
 // @author       You
 // @match        https://weibo.com/*
@@ -80,6 +80,28 @@
       fallback = fallback.parentElement;
     }
     return fallback || img.parentElement;
+  }
+
+  // ---- 提取贴文发布日期 ----
+  function getPostDate(container) {
+    // 查找时间元素：<a class="*time*" title="2026-05-24 18:40">
+    var timeEl = container.querySelector('a[class*="time"][title], a[class*="_time"][title], time[datetime]');
+    if (!timeEl) {
+      // 备用：查找任何带日期格式 title 的元素
+      var allWithTitle = container.querySelectorAll('[title]');
+      for (var i = 0; i < allWithTitle.length; i++) {
+        var t = allWithTitle[i].getAttribute('title');
+        if (t && /^\d{4}-\d{2}-\d{2}/.test(t)) {
+          timeEl = allWithTitle[i];
+          break;
+        }
+      }
+    }
+    if (!timeEl) return '';
+
+    var dateStr = timeEl.getAttribute('title') || timeEl.getAttribute('datetime') || '';
+    var match = dateStr.match(/^(\d{4}-\d{2}-\d{2})/);
+    return match ? match[1] : '';
   }
 
   // ---- 长贴文展开 ----
@@ -187,7 +209,9 @@
         headers: { 'Referer': 'https://weibo.com/' },
         onload: function (r) {
           if (r.status === 200 && r.response && r.response.size > 500) {
-            var name = String(imgInfo.index).padStart(String(imgInfo.total).length, '0') + '_' + imgInfo.fileName;
+            var prefix = String(imgInfo.index).padStart(String(imgInfo.total).length, '0');
+            var date = imgInfo.date ? imgInfo.date + '_' : '';
+            var name = date + prefix + '_' + imgInfo.fileName;
             triggerBlobDownload(r.response, name);
             resolve('success');
           } else {
@@ -244,7 +268,8 @@
     var groups = getPostGroups();
     var allImages = [];
     groups.forEach(function (g) {
-      g.images.forEach(function (img) { allImages.push(img); });
+      var date = getPostDate(g.container);
+      g.images.forEach(function (img) { img.date = date; allImages.push(img); });
     });
 
     if (allImages.length === 0) {
@@ -271,14 +296,16 @@
       await sleep(1500); // 等懒加载图片渲染
     }
 
+    var date = getPostDate(container);
     var images = extractImages(container);
+    images.forEach(function (img) { img.date = date; });
 
     if (images.length === 0) {
       log('该贴文未找到图片', 'error');
       return;
     }
 
-    log('该贴文共 ' + images.length + ' 张图片');
+    log('发布日期: ' + (date || '未知') + '，共 ' + images.length + ' 张图片');
     var result = await downloadImages(images);
     log('===== 完成! 成功 ' + result.success + ' / 失败 ' + result.fail + ' =====',
       result.success === images.length ? 'success' : 'info');
