@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         微博原图下载器
 // @namespace    https://github.com/sun27/weibo-image-downloader
-// @version      5.5.0
+// @version      5.5.1
 // @description  微博原图下载：按贴文/日期整理，自动展开长文折图动图，下载失败自动重试
 // @author       You
 // @match        https://weibo.com/*
@@ -227,6 +227,7 @@
       seen.add(bestUrl);
       images.push({
         original: toOriginalUrl(bestUrl),
+        pageSrc: bestUrl,
         fileName: getFileName(bestUrl),
       });
     }
@@ -280,6 +281,7 @@
       }
       containerMap.get(cid).images.push({
         original: toOriginalUrl(src),
+        pageSrc: src,
         fileName: getFileName(src),
       });
     }
@@ -299,17 +301,25 @@
 
   // ---- 下载逻辑 ----
 
-  // 生成回退 URL（原图 → large → mw690）
-  function getFallbackUrls(originalUrl) {
+  // 生成回退 URL（原图 → large → mw690 → 页面原始尺寸）
+  function getFallbackUrls(originalUrl, pageSrc) {
     var urls = [originalUrl];
     var re = /^(https?:\/\/[^/]+\.sinaimg\.cn\/)([^/]+)(\/[^?]+)/i;
     var m = originalUrl.match(re);
-    if (!m) return urls;
+    if (!m) {
+      if (pageSrc && pageSrc !== originalUrl) urls.push(pageSrc);
+      return urls;
+    }
+    var currentSize = m[2];
     var fallbacks = ['large', 'mw690'];
     for (var f = 0; f < fallbacks.length; f++) {
-      if (m[2] !== fallbacks[f]) {
+      if (currentSize !== fallbacks[f]) {
         urls.push(m[1] + fallbacks[f] + m[3]);
       }
+    }
+    // 最后兜底：页面上的原始 URL（已知可访问）
+    if (pageSrc && pageSrc !== originalUrl) {
+      urls.push(pageSrc);
     }
     return urls;
   }
@@ -368,7 +378,7 @@
 
     // 为每张图片初始化回退 URL 列表
     pending.forEach(function (img) {
-      img.fallbackUrls = getFallbackUrls(img.original);
+      img.fallbackUrls = getFallbackUrls(img.original, img.pageSrc);
       img.fallbackIdx = 0;
       img.url = img.fallbackUrls[0];
       img.retryCount = 0;
@@ -391,7 +401,7 @@
         img.total = images.length;
         img.retryCount++;
 
-        var qualityLabel = img.fallbackIdx === 0 ? 'original' : img.fallbackIdx === 1 ? 'large' : 'mw690';
+        var qualityLabel = ['original', 'large', 'mw690', 'page'][img.fallbackIdx] || 'fallback';
         log('--- [' + img.index + '/' + img.total + ']' + (img.retryCount > 1 ? ' 重试#' + img.retryCount + ' [' + qualityLabel + ']' : ''));
         log('  ' + img.url.substring(0, 90));
 
@@ -405,7 +415,8 @@
           if (img.fallbackIdx < img.fallbackUrls.length) {
             img.url = img.fallbackUrls[img.fallbackIdx];
             stillPending.push(img);
-            log('  失败，将用 [' + (img.fallbackIdx === 1 ? 'large' : 'mw690') + '] 重试', 'error');
+            var nextLabel = ['large', 'mw690', 'page'][img.fallbackIdx - 1] || 'fallback';
+            log('  失败，将用 [' + nextLabel + '] 重试', 'error');
           } else {
             fail++;
             log('  最终失败 — 所有画质级别均不可用', 'error');
