@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         微博原图下载器
 // @namespace    https://github.com/sun27/weibo-image-downloader
-// @version      5.0.0
+// @version      5.0.1
 // @description  在微博网页版选中特定贴文，一键下载其原图
 // @author       You
 // @match        https://weibo.com/*
@@ -105,6 +105,8 @@
   }
 
   // 获取所有贴文容器及其包含的图片
+  var containerIdCounter = 0;
+
   function getPostGroups() {
     var allImgs = document.querySelectorAll('img');
     var containerMap = new Map();
@@ -118,36 +120,24 @@
       seen.add(src);
 
       var container = findPostContainer(img);
-      var key = getElementSignature(container);
 
-      if (!containerMap.has(key)) {
-        containerMap.set(key, { container: container, images: [] });
+      // 用 data 属性做唯一标识，避免虚拟滚动列表里同结构元素被合并
+      var cid = container.getAttribute('data-wbdl-cid');
+      if (!cid) {
+        cid = 'c' + (++containerIdCounter);
+        container.setAttribute('data-wbdl-cid', cid);
       }
-      containerMap.get(key).images.push({
+
+      if (!containerMap.has(cid)) {
+        containerMap.set(cid, { container: container, images: [] });
+      }
+      containerMap.get(cid).images.push({
         original: toOriginalUrl(src),
         fileName: getFileName(src),
       });
     }
 
     return Array.from(containerMap.values());
-  }
-
-  // 生成元素的唯一标识（用于去重）
-  function getElementSignature(el) {
-    var parts = [];
-    var maxDepth = 3;
-    while (el && el !== document.body && maxDepth > 0) {
-      var tag = el.tagName ? el.tagName.toLowerCase() : '';
-      var cls = '';
-      if (el.classList && el.classList.length > 0) {
-        cls = '.' + Array.from(el.classList).slice(0, 3).join('.');
-      }
-      var id = el.id ? '#' + el.id : '';
-      parts.push(tag + id + cls);
-      el = el.parentElement;
-      maxDepth--;
-    }
-    return parts.join('>');
   }
 
   // ---- 下载逻辑 ----
@@ -274,6 +264,11 @@
 
     var groups = getPostGroups();
     log('选择模式: 检测到 ' + groups.length + ' 条贴文', 'highlight');
+    groups.forEach(function (g, i) {
+      var tag = g.container.tagName ? g.container.tagName.toLowerCase() : '';
+      var cls = g.container.className ? (typeof g.container.className === 'string' ? g.container.className.substring(0, 60) : '') : '';
+      log('  贴文' + (i + 1) + ': <' + tag + (cls ? ' class="' + cls + '"' : '') + '> ' + g.images.length + '图');
+    });
     log('点击贴文右上角的下载按钮下载该贴文图片');
     log('按 Esc 或再次点击"选择贴文"退出');
 
@@ -290,9 +285,19 @@
     updateSelectBtn();
 
     postOverlays.forEach(function (o) {
-      if (o && o.parentNode) o.parentNode.removeChild(o);
+      if (o && o.parentNode) {
+        o.parentNode.style.outline = '';
+        o.parentNode.style.outlineOffset = '';
+        o.parentNode.removeChild(o);
+      }
     });
     postOverlays = [];
+
+    // 清理临时属性
+    var marked = document.querySelectorAll('[data-wbdl-cid]');
+    for (var i = 0; i < marked.length; i++) {
+      marked[i].removeAttribute('data-wbdl-cid');
+    }
 
     document.removeEventListener('keydown', onKeyDown);
   }
