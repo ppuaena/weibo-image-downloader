@@ -2,7 +2,7 @@
 // @name         微博原图下载器
 // @namespace    https://github.com/sun27/weibo-image-downloader
 // @version      5.5.0
-// @description  在微博网页版选中特定贴文，一键下载其原图（支持长文展开、滚动自动发现）
+// @description  微博原图下载：按贴文/日期整理，自动展开长文折图动图，下载失败自动重试
 // @author       You
 // @match        https://weibo.com/*
 // @match        https://www.weibo.com/*
@@ -713,9 +713,9 @@
   // ---- 初始化 ----
   function init() {
     createPanel();
-    log('微博原图下载器 v5.1.0 已加载');
-    log('「下载全部」: 下载页面所有贴文图片');
-    log('「选择贴文」: 进入选择模式，滚动自动发现新贴文');
+    log('微博原图下载器 v5.5.0 已加载');
+    log('「下载全部」: 全页贴文原图，自动展开长文/折图/动图');
+    log('「选择贴文」: 点选单条下载，滚动自动发现新贴文');
   }
 
   if (document.readyState === 'loading') {
