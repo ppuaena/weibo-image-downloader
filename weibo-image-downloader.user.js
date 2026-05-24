@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         微博原图下载器
 // @namespace    https://github.com/sun27/weibo-image-downloader
-// @version      5.0.2
-// @description  在微博网页版选中特定贴文，一键下载其原图
+// @version      5.1.0
+// @description  在微博网页版选中特定贴文，一键下载其原图（支持长文展开、滚动自动发现）
 // @author       You
 // @match        https://weibo.com/*
 // @match        https://www.weibo.com/*
@@ -16,6 +16,8 @@
   var selectionMode = false;
   var postOverlays = [];
   var logLines = [];
+  var scrollObserver = null;
+  var overlayIndex = 0;
 
   // ---- 日志 ----
   function log(msg, type) {
@@ -68,17 +70,11 @@
     }
   }
 
-  // 找到 img 所属的贴文容器节点
   function findPostContainer(img) {
-    // article 是微博贴文的标准容器
     var article = img.closest('article');
     if (article) return article;
-
-    // 备用：按 class 名匹配常见容器
     var el = img.closest('[class*="Feed_body"], [class*="card-feed"], [class*="wbpro-feed"], [class*="WB_feed"], [class*="detail_wbtext"]');
     if (el) return el;
-
-    // 兜底：往上走 4 层
     var fallback = img.parentElement;
     for (var i = 0; i < 4 && fallback && fallback !== document.body; i++) {
       fallback = fallback.parentElement;
@@ -86,7 +82,56 @@
     return fallback || img.parentElement;
   }
 
-  // 获取所有贴文容器及其包含的图片
+  // ---- 长贴文展开 ----
+  function expandPost(container) {
+    // 查找"展开全文"按钮（多种可能的文案）
+    var expandSelectors = [
+      '[class*="expand"]', '[class*="unfold"]', '[class*="fold"]',
+      '[class*="full_text"]', '[class*="fulltext"]',
+      '[class*="_expand"]', '[class*="_unfold"]',
+      'a[action-type="fl_unfold"]', 'a[action-type="fl_fold"]',
+    ];
+
+    var clicked = 0;
+    for (var s = 0; s < expandSelectors.length; s++) {
+      var btns = container.querySelectorAll(expandSelectors[s]);
+      for (var b = 0; b < btns.length; b++) {
+        var btn = btns[b];
+        // 只点"展开"，不点"收起"
+        var text = (btn.textContent || '').trim();
+        if (text.indexOf('收起') !== -1) continue;
+        if (text.indexOf('展开') !== -1 || text.indexOf('全文') !== -1 || text.indexOf('更多') !== -1) {
+          try { btn.click(); clicked++; } catch (e) {}
+        } else if (btn.offsetParent !== null && btn.offsetWidth > 0) {
+          // 可见的展开按钮，文案可能不同，尝试点击
+          try { btn.click(); clicked++; } catch (e) {}
+        }
+      }
+    }
+
+    return clicked;
+  }
+
+  // 从容器中提取所有图片信息
+  function extractImages(container) {
+    var images = [];
+    var imgs = container.querySelectorAll('img');
+    var seen = new Set();
+
+    for (var i = 0; i < imgs.length; i++) {
+      if (!isValidImage(imgs[i])) continue;
+      var src = imgs[i].src || imgs[i].getAttribute('data-src') || '';
+      if (seen.has(src)) continue;
+      seen.add(src);
+      images.push({
+        original: toOriginalUrl(src),
+        fileName: getFileName(src),
+      });
+    }
+    return images;
+  }
+
+  // ---- 获取贴文分组 ----
   var containerIdCounter = 0;
 
   function getPostGroups() {
@@ -102,8 +147,6 @@
       seen.add(src);
 
       var container = findPostContainer(img);
-
-      // 用 data 属性做唯一标识，避免虚拟滚动列表里同结构元素被合并
       var cid = container.getAttribute('data-wbdl-cid');
       if (!cid) {
         cid = 'c' + (++containerIdCounter);
@@ -120,6 +163,16 @@
     }
 
     return Array.from(containerMap.values());
+  }
+
+  // 获取单个 container 的信息（不去重全页）
+  function getPostGroupFor(container) {
+    var cid = container.getAttribute('data-wbdl-cid');
+    if (!cid) {
+      cid = 'c' + (++containerIdCounter);
+      container.setAttribute('data-wbdl-cid', cid);
+    }
+    return { container: container, images: extractImages(container) };
   }
 
   // ---- 下载逻辑 ----
@@ -173,8 +226,7 @@
       images[j].index = j + 1;
       images[j].total = images.length;
       log('--- [' + (j + 1) + '/' + images.length + '] ---');
-      var url = images[j].original;
-      log('  ' + url.substring(0, 90));
+      log('  ' + images[j].original.substring(0, 90));
       var result = await downloadWithGM(images[j]);
       if (result === 'success') success++;
       else fail++;
@@ -206,26 +258,20 @@
       result.success === allImages.length ? 'success' : 'info');
   }
 
-  // 下载单条贴文
+  // 下载单条贴文（先展开长文）
   async function downloadPost(container) {
     exitSelectionMode();
     logLines = [];
     log('===== 下载选中贴文 =====');
 
-    var images = [];
-    var imgs = container.querySelectorAll('img');
-    var seen = new Set();
-
-    for (var i = 0; i < imgs.length; i++) {
-      if (!isValidImage(imgs[i])) continue;
-      var src = imgs[i].src || imgs[i].getAttribute('data-src') || '';
-      if (seen.has(src)) continue;
-      seen.add(src);
-      images.push({
-        original: toOriginalUrl(src),
-        fileName: getFileName(src),
-      });
+    // 展开长贴文
+    var expanded = expandPost(container);
+    if (expanded > 0) {
+      log('已展开 ' + expanded + ' 处折叠内容，等待图片加载...');
+      await sleep(1500); // 等懒加载图片渲染
     }
+
+    var images = extractImages(container);
 
     if (images.length === 0) {
       log('该贴文未找到图片', 'error');
@@ -236,6 +282,64 @@
     var result = await downloadImages(images);
     log('===== 完成! 成功 ' + result.success + ' / 失败 ' + result.fail + ' =====',
       result.success === images.length ? 'success' : 'info');
+  }
+
+  // ---- 滚动自动发现 ----
+  function startScrollObserver() {
+    if (scrollObserver) return;
+
+    // 找到虚拟滚动的容器
+    var scroller = document.querySelector('#scroller') || document.querySelector('[class*="scroller"]') || document.querySelector('main') || document.body;
+
+    scrollObserver = new MutationObserver(function (mutations) {
+      var newArticles = [];
+      mutations.forEach(function (m) {
+        m.addedNodes.forEach(function (node) {
+          if (node.nodeType !== 1) return;
+          // 新增的 article 或其内部的 article
+          if (node.tagName === 'ARTICLE') {
+            newArticles.push(node);
+          } else if (node.querySelectorAll) {
+            var articles = node.querySelectorAll('article');
+            for (var a = 0; a < articles.length; a++) {
+              newArticles.push(articles[a]);
+            }
+          }
+        });
+      });
+
+      if (newArticles.length > 0) {
+        // 去重
+        var uniqueArticles = [];
+        var seenIds = new Set();
+        newArticles.forEach(function (art) {
+          var cid = art.getAttribute('data-wbdl-cid') || '';
+          if (cid && seenIds.has(cid)) return;
+          if (cid) seenIds.add(cid);
+          uniqueArticles.push(art);
+        });
+
+        uniqueArticles.forEach(function (art) {
+          // 检查是否已有 overlay
+          if (art.querySelector('.wbdl-post-overlay')) return;
+          var group = getPostGroupFor(art);
+          if (group.images.length === 0) return;
+          var overlay = createPostOverlay(group);
+          postOverlays.push(overlay);
+          log('  发现新贴文: ' + group.images.length + '图');
+        });
+      }
+    });
+
+    scrollObserver.observe(scroller, { childList: true, subtree: true });
+    log('滚动监听已开启，新贴文将自动添加下载按钮');
+  }
+
+  function stopScrollObserver() {
+    if (scrollObserver) {
+      scrollObserver.disconnect();
+      scrollObserver = null;
+    }
   }
 
   // ---- 选择模式 UI ----
@@ -254,17 +358,21 @@
     log('点击贴文右上角的下载按钮下载该贴文图片');
     log('按 Esc 或再次点击"选择贴文"退出');
 
-    groups.forEach(function (group, idx) {
-      var overlay = createPostOverlay(group, idx);
+    groups.forEach(function (group) {
+      var overlay = createPostOverlay(group);
       postOverlays.push(overlay);
     });
 
     document.addEventListener('keydown', onKeyDown);
+
+    // 启动滚动监听
+    startScrollObserver();
   }
 
   function exitSelectionMode() {
     selectionMode = false;
     updateSelectBtn();
+    stopScrollObserver();
 
     postOverlays.forEach(function (o) {
       if (o && o.parentNode) {
@@ -275,7 +383,6 @@
     });
     postOverlays = [];
 
-    // 清理临时属性
     var marked = document.querySelectorAll('[data-wbdl-cid]');
     for (var i = 0; i < marked.length; i++) {
       marked[i].removeAttribute('data-wbdl-cid');
@@ -300,11 +407,10 @@
     }
   }
 
-  function createPostOverlay(group, idx) {
+  function createPostOverlay(group) {
     var container = group.container;
     var count = group.images.length;
 
-    // 让容器成为定位参考
     var origPosition = container.style.position;
     if (!origPosition || origPosition === 'static') {
       container.style.position = 'relative';
@@ -332,7 +438,6 @@
     overlay.appendChild(btn);
     container.appendChild(overlay);
 
-    // 鼠标悬停时高亮容器边框
     container.addEventListener('mouseenter', function () {
       container.style.outline = '2px dashed #ff8200';
       container.style.outlineOffset = '-2px';
@@ -387,9 +492,9 @@
   // ---- 初始化 ----
   function init() {
     createPanel();
-    log('微博原图下载器 v5.0.0 已加载');
+    log('微博原图下载器 v5.1.0 已加载');
     log('「下载全部」: 下载页面所有贴文图片');
-    log('「选择贴文」: 进入选择模式，点击贴文上的按钮下载单条');
+    log('「选择贴文」: 进入选择模式，滚动自动发现新贴文');
   }
 
   if (document.readyState === 'loading') {
