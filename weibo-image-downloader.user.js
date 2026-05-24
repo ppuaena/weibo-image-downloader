@@ -479,7 +479,6 @@
 
   // 下载单条贴文（先展开长文、激活动图）
   async function downloadPost(container) {
-    exitSelectionMode();
     logLines = [];
     log('===== 下载选中贴文 =====');
 
