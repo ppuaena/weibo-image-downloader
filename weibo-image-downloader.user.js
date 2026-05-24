@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         微博原图下载器
 // @namespace    https://github.com/sun27/weibo-image-downloader
-// @version      5.4.0
+// @version      5.4.1
 // @description  在微博网页版选中特定贴文，一键下载其原图（支持长文展开、滚动自动发现）
 // @author       You
 // @match        https://weibo.com/*
@@ -179,28 +179,6 @@
       });
     }
 
-    // 2. 扫描 video 标签（微博可能将 GIF 转为 mp4）
-    var videos = container.querySelectorAll('video');
-    for (var v = 0; v < videos.length; v++) {
-      var video = videos[v];
-      var vidSrc = video.src || video.getAttribute('data-src') || '';
-      // 也检查 source 子标签
-      if (!vidSrc) {
-        var source = video.querySelector('source');
-        if (source) vidSrc = source.src || source.getAttribute('data-src') || '';
-      }
-      if (!vidSrc || seen.has(vidSrc)) continue;
-      if (vidSrc.indexOf('sinaimg.cn') === -1 && vidSrc.indexOf('weibo.cn') === -1 && vidSrc.indexOf('weibocdn') === -1) continue;
-
-      seen.add(vidSrc);
-      var vname = getFileName(vidSrc);
-      if (!vname.match(/\.(mp4|webm|mov)$/i)) vname += '.mp4';
-      images.push({
-        original: vidSrc,
-        fileName: vname,
-      });
-    }
-
     return images;
   }
 
@@ -296,8 +274,8 @@
         onload: function (r) {
           if (r.status === 200 && r.response && r.response.size > 500) {
             var prefix = String(imgInfo.index).padStart(String(imgInfo.total).length, '0');
-            var date = imgInfo.date ? imgInfo.date + '_' : '';
-            var name = date + prefix + '_' + imgInfo.fileName;
+            var folder = imgInfo.date ? imgInfo.date + '/' : '';
+            var name = folder + prefix + '_' + imgInfo.fileName;
             triggerBlobDownload(r.response, name);
             resolve('success');
           } else {
