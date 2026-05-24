@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         微博原图下载器
 // @namespace    https://github.com/sun27/weibo-image-downloader
-// @version      5.3.0
+// @version      5.4.0
 // @description  在微博网页版选中特定贴文，一键下载其原图（支持长文展开、滚动自动发现）
 // @author       You
 // @match        https://weibo.com/*
@@ -134,23 +134,93 @@
     return clicked;
   }
 
-  // 从容器中提取所有图片信息
+  // 从容器中提取所有图片/动图信息
   function extractImages(container) {
     var images = [];
-    var imgs = container.querySelectorAll('img');
     var seen = new Set();
 
+    // 1. 扫描 img 标签：检查 src + 所有可能存 GIF URL 的属性
+    var imgs = container.querySelectorAll('img');
     for (var i = 0; i < imgs.length; i++) {
-      if (!isValidImage(imgs[i])) continue;
-      var src = imgs[i].src || imgs[i].getAttribute('data-src') || '';
-      if (seen.has(src)) continue;
-      seen.add(src);
+      var img = imgs[i];
+      // 尝试多个属性获取最佳 URL
+      var candidateUrls = [
+        img.getAttribute('data-gifsrc'),
+        img.getAttribute('gifsrc'),
+        img.getAttribute('data-gif'),
+        img.getAttribute('data-original'),
+        img.getAttribute('data-src'),
+        img.src,
+      ];
+      var bestUrl = '';
+      for (var u = 0; u < candidateUrls.length; u++) {
+        var uu = candidateUrls[u];
+        if (uu && uu.indexOf('sinaimg.cn') !== -1) {
+          bestUrl = uu;
+          // 优先用 .gif 的 URL
+          if (uu.toLowerCase().indexOf('.gif') !== -1) break;
+        }
+      }
+
+      if (!bestUrl || seen.has(bestUrl)) continue;
+      if (bestUrl.indexOf('h5.sinaimg.cn') !== -1 || bestUrl.indexOf('a.sinaimg.cn') !== -1) continue;
+
+      // 放宽尺寸限制：动图缩略图可能较小
+      var w = img.naturalWidth || img.width || 0;
+      var h = img.naturalHeight || img.height || 0;
+      var isGif = bestUrl.toLowerCase().indexOf('.gif') !== -1;
+      if (!isGif && w > 0 && h > 0 && (w < 120 || h < 120)) continue;
+      if (img.closest('[class*="avatar"], [class*="Avatar"], [class*="emoji"], [class*="Emoji"]')) continue;
+
+      seen.add(bestUrl);
       images.push({
-        original: toOriginalUrl(src),
-        fileName: getFileName(src),
+        original: toOriginalUrl(bestUrl),
+        fileName: getFileName(bestUrl),
       });
     }
+
+    // 2. 扫描 video 标签（微博可能将 GIF 转为 mp4）
+    var videos = container.querySelectorAll('video');
+    for (var v = 0; v < videos.length; v++) {
+      var video = videos[v];
+      var vidSrc = video.src || video.getAttribute('data-src') || '';
+      // 也检查 source 子标签
+      if (!vidSrc) {
+        var source = video.querySelector('source');
+        if (source) vidSrc = source.src || source.getAttribute('data-src') || '';
+      }
+      if (!vidSrc || seen.has(vidSrc)) continue;
+      if (vidSrc.indexOf('sinaimg.cn') === -1 && vidSrc.indexOf('weibo.cn') === -1 && vidSrc.indexOf('weibocdn') === -1) continue;
+
+      seen.add(vidSrc);
+      var vname = getFileName(vidSrc);
+      if (!vname.match(/\.(mp4|webm|mov)$/i)) vname += '.mp4';
+      images.push({
+        original: vidSrc,
+        fileName: vname,
+      });
+    }
+
     return images;
+  }
+
+  // 激活容器内的动图（点击播放按钮）
+  function activateGifs(container) {
+    var clicked = 0;
+    // 微博动图播放按钮常见 class / 属性
+    var triggers = container.querySelectorAll(
+      '[class*="play_gif"], [class*="playGif"], [class*="gif_play"], ' +
+      '[class*="video_play"], [class*="gif-play"], [class*="GIF"],' +
+      '[action-type="fl_gif"], [action-type="feed_list_gif"], ' +
+      'i[class*="play"]'
+    );
+    for (var i = 0; i < triggers.length; i++) {
+      var t = triggers[i];
+      if (t.offsetParent !== null && t.offsetWidth > 0) {
+        try { t.click(); clicked++; } catch (e) {}
+      }
+    }
+    return clicked;
   }
 
   // ---- 获取贴文分组 ----
@@ -335,10 +405,24 @@
 
     var groups = getPostGroups();
     var allImages = [];
-    groups.forEach(function (g) {
-      var date = getPostDate(g.container);
-      g.images.forEach(function (img) { img.date = date; allImages.push(img); });
-    });
+
+    for (var g = 0; g < groups.length; g++) {
+      var container = groups[g].container;
+      expandPost(container);
+      var gifClicked = activateGifs(container);
+      if (gifClicked > 0) { log('  激活 ' + gifClicked + ' 个动图'); }
+    }
+
+    // GIF 激活后等待加载
+    await sleep(1500);
+
+    // 重新扫描（此时动图 URL 已就绪）
+    allImages = [];
+    for (var g2 = 0; g2 < groups.length; g2++) {
+      var date = getPostDate(groups[g2].container);
+      var imgs = extractImages(groups[g2].container);
+      imgs.forEach(function (img) { img.date = date; allImages.push(img); });
+    }
 
     if (allImages.length === 0) {
       log('未找到图片', 'error');
@@ -351,7 +435,7 @@
       result.success === allImages.length ? 'success' : 'info');
   }
 
-  // 下载单条贴文（先展开长文）
+  // 下载单条贴文（先展开长文、激活动图）
   async function downloadPost(container) {
     exitSelectionMode();
     logLines = [];
@@ -359,9 +443,16 @@
 
     // 展开长贴文
     var expanded = expandPost(container);
-    if (expanded > 0) {
-      log('已展开 ' + expanded + ' 处折叠内容，等待图片加载...');
-      await sleep(1500); // 等懒加载图片渲染
+    if (expanded > 0) { log('已展开 ' + expanded + ' 处折叠内容'); }
+
+    // 激活动图
+    var gifClicked = activateGifs(container);
+    if (gifClicked > 0) { log('已激活 ' + gifClicked + ' 个动图'); }
+
+    // 等待图片和动图加载
+    if (expanded > 0 || gifClicked > 0) {
+      log('等待图片加载...');
+      await sleep(2000);
     }
 
     var date = getPostDate(container);
