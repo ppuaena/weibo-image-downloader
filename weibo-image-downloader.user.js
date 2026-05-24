@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         微博原图下载器
 // @namespace    https://github.com/sun27/weibo-image-downloader
-// @version      5.0.1
+// @version      5.0.2
 // @description  在微博网页版选中特定贴文，一键下载其原图
 // @author       You
 // @match        https://weibo.com/*
@@ -70,33 +70,15 @@
 
   // 找到 img 所属的贴文容器节点
   function findPostContainer(img) {
-    var el = img.parentElement;
-    var depth = 0;
-    while (el && el !== document.body && depth < 12) {
-      var tag = el.tagName ? el.tagName.toLowerCase() : '';
-      var cls = el.className ? (typeof el.className === 'string' ? el.className : '') : '';
+    // article 是微博贴文的标准容器
+    var article = img.closest('article');
+    if (article) return article;
 
-      // article 标签几乎就是一条贴文
-      if (tag === 'article') return el;
+    // 备用：按 class 名匹配常见容器
+    var el = img.closest('[class*="Feed_body"], [class*="card-feed"], [class*="wbpro-feed"], [class*="WB_feed"], [class*="detail_wbtext"]');
+    if (el) return el;
 
-      // 匹配常见的贴文容器 class
-      if (cls && (
-        cls.indexOf('Feed_body') !== -1 ||
-        cls.indexOf('card-feed') !== -1 ||
-        cls.indexOf('card-wrap') !== -1 ||
-        cls.indexOf('WB_feed') !== -1 ||
-        cls.indexOf('feed_content') !== -1 ||
-        cls.indexOf('detail_wbtext') !== -1 ||
-        cls.indexOf('mwb-detail') !== -1 ||
-        cls.indexOf('woo-box') !== -1
-      )) {
-        return el;
-      }
-
-      el = el.parentElement;
-      depth++;
-    }
-    // 兜底：返回 img 的曾祖父元素
+    // 兜底：往上走 4 层
     var fallback = img.parentElement;
     for (var i = 0; i < 4 && fallback && fallback !== document.body; i++) {
       fallback = fallback.parentElement;
