@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         微博原图下载器
 // @namespace    https://github.com/sun27/weibo-image-downloader
-// @version      5.4.1
+// @version      5.5.0
 // @description  在微博网页版选中特定贴文，一键下载其原图（支持长文展开、滚动自动发现）
 // @author       You
 // @match        https://weibo.com/*
@@ -134,15 +134,67 @@
     return clicked;
   }
 
+  // 展开被折叠的图片（超过 9 张时微博只显示前 9 张）
+  function expandFoldedImages(container) {
+    var clicked = 0;
+    // 查找"+N"展开按钮或"查看全部"按钮
+    var expandBtns = container.querySelectorAll(
+      '[class*="photo_more"], [class*="img_more"], [class*="pic_more"], ' +
+      '[class*="fold_"], [class*="expand_pic"], [class*="show_all"], ' +
+      '[action-type="fl_pics"], [class*="pic_more"]'
+    );
+    for (var i = 0; i < expandBtns.length; i++) {
+      if (expandBtns[i].offsetParent !== null && expandBtns[i].offsetWidth > 0) {
+        try { expandBtns[i].click(); clicked++; } catch (e) {}
+      }
+    }
+    // 也尝试找含"图"字的可见按钮
+    if (clicked === 0) {
+      var allBtns = container.querySelectorAll('a, span, div[class*="more"]');
+      for (var j = 0; j < allBtns.length; j++) {
+        var t = (allBtns[j].textContent || '').trim();
+        if (t && /^[+\d]+$/.test(t) && allBtns[j].offsetParent !== null) {
+          try { allBtns[j].click(); clicked++; } catch (e) {}
+        }
+      }
+    }
+    return clicked;
+  }
+
+  // 判断是否为视频缩略图
+  function isVideoThumbnail(img) {
+    // 图片本身有播放相关 class
+    if (img.className && typeof img.className === 'string') {
+      if (/video|play|player/i.test(img.className)) return true;
+    }
+    // 父级或祖先有视频/播放相关标记
+    var parent = img.closest('[class*="video"], [class*="Video"], [class*="play_wrap"], [class*="play-wrap"]');
+    if (parent) return true;
+    // 兄弟元素有播放图标
+    var wrapper = img.parentElement;
+    if (wrapper) {
+      var playIcon = wrapper.querySelector('i[class*="play"], span[class*="play"], [class*="play_icon"], [class*="playIcon"], [class*="video_icon"]');
+      if (playIcon && playIcon.offsetParent !== null) return true;
+    }
+    // img 自身 src 包含 video 关键字
+    var src = img.src || '';
+    if (/video|Video|VIDEO/i.test(src)) return true;
+    return false;
+  }
+
   // 从容器中提取所有图片/动图信息
   function extractImages(container) {
     var images = [];
     var seen = new Set();
 
-    // 1. 扫描 img 标签：检查 src + 所有可能存 GIF URL 的属性
+    // 扫描 img 标签：检查 src + 所有可能存 GIF URL 的属性
     var imgs = container.querySelectorAll('img');
     for (var i = 0; i < imgs.length; i++) {
       var img = imgs[i];
+
+      // 跳过视频缩略图
+      if (isVideoThumbnail(img)) continue;
+
       // 尝试多个属性获取最佳 URL
       var candidateUrls = [
         img.getAttribute('data-gifsrc'),
@@ -387,12 +439,13 @@
     for (var g = 0; g < groups.length; g++) {
       var container = groups[g].container;
       expandPost(container);
+      expandFoldedImages(container);
       var gifClicked = activateGifs(container);
       if (gifClicked > 0) { log('  激活 ' + gifClicked + ' 个动图'); }
     }
 
-    // GIF 激活后等待加载
-    await sleep(1500);
+    // 图片展开/激活后等待加载
+    await sleep(2000);
 
     // 重新扫描（此时动图 URL 已就绪）
     allImages = [];
@@ -423,14 +476,18 @@
     var expanded = expandPost(container);
     if (expanded > 0) { log('已展开 ' + expanded + ' 处折叠内容'); }
 
+    // 展开被折叠的图片（超过9张）
+    var imgExpanded = expandFoldedImages(container);
+    if (imgExpanded > 0) { log('已展开 ' + imgExpanded + ' 组折叠图片'); }
+
     // 激活动图
     var gifClicked = activateGifs(container);
     if (gifClicked > 0) { log('已激活 ' + gifClicked + ' 个动图'); }
 
     // 等待图片和动图加载
-    if (expanded > 0 || gifClicked > 0) {
+    if (expanded > 0 || imgExpanded > 0 || gifClicked > 0) {
       log('等待图片加载...');
-      await sleep(2000);
+      await sleep(2500);
     }
 
     var date = getPostDate(container);
