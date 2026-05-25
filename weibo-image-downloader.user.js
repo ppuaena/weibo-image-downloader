@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         微博原图下载器
 // @namespace    https://github.com/sun27/weibo-image-downloader
-// @version      5.6.2-debug
+// @version      5.6.3-debug
 // @description  微博原图下载：按贴文/日期整理，自动展开长文折图动图，下载失败自动重试
 // @author       You
 // @match        https://weibo.com/*
@@ -165,23 +165,33 @@
 
   // 判断是否为视频缩略图
   function isVideoThumbnail(img) {
-    // 图片自身 class 含 video/play/player
     var cls = img.className;
     if (cls && typeof cls === 'string') {
-      if (/video|play|player|picture-img/i.test(cls)) return true;
+      if (/video|play|player/i.test(cls)) {
+        log('    → 视频缩略图: class含video/play (' + cls.substring(0, 40) + ')');
+        return true;
+      }
     }
-    // 祖先含视频容器标记
-    if (img.closest('[class*="video"], [class*="Video"], [class*="play_wrap"], [class*="play-wrap"]')) return true;
-    // 兄弟或附近有播放图标、视频时长、视频标签
-    var wrapper = img.parentElement;
-    if (wrapper) {
-      if (wrapper.querySelector('[class*="videobox"], [class*="videotime"], [class*="video_time"], video')) return true;
-      if (wrapper.querySelector('i[class*="play"], span[class*="play"], [class*="play_icon"], [class*="playIcon"]')) return true;
+    var videoAncestor = img.closest('[class*="video"], [class*="Video"]');
+    if (videoAncestor) {
+      log('    → 视频缩略图: 祖先含video class (' + (videoAncestor.className || '').substring(0, 40) + ')');
+      return true;
     }
-    // 检查最近层级的 picture 容器内是否有视频标记
-    var picture = img.closest('[class*="picture"], [class*="woo-picture"]');
-    if (picture) {
-      if (picture.querySelector('[class*="videobox"], [class*="videotime"], [class*="video_time"]')) return true;
+    var el = img.parentElement;
+    for (var level = 0; level < 3 && el; level++) {
+      if (el.querySelector) {
+        var reason = '';
+        if (el.querySelector('[class*="videobox"], [class*="videotime"], [class*="video_time"], video')) {
+          reason = 'videobox/videotime/video';
+        } else if (el.querySelector('i[class*="play"], [class*="play_icon"], [class*="playIcon"]')) {
+          reason = '播放图标';
+        }
+        if (reason) {
+          log('    → 视频缩略图: 父级L' + level + ' ' + (el.className || el.tagName || '').substring(0, 40) + ' 含' + reason);
+          return true;
+        }
+      }
+      el = el.parentElement;
     }
     return false;
   }
@@ -770,7 +780,7 @@
   // ---- 初始化 ----
   function init() {
     createPanel();
-    log('微博原图下载器 v5.6.2-debug 已加载 (详细日志模式)');
+    log('微博原图下载器 v5.6.3-debug 已加载 (详细日志模式)');
     log('「下载全部」: 全页贴文原图，自动展开长文/折图/动图');
     log('「选择贴文」: 点选单条下载，滚动自动发现新贴文');
   }
