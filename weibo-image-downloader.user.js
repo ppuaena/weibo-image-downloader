@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         微博原图下载器
 // @namespace    https://github.com/sun27/weibo-image-downloader
-// @version      5.6.1
+// @version      5.6.2-debug
 // @description  微博原图下载：按贴文/日期整理，自动展开长文折图动图，下载失败自动重试
 // @author       You
 // @match        https://weibo.com/*
@@ -137,7 +137,7 @@
   // 展开被折叠的图片（超过 9 张时微博只显示前 9 张）
   function expandFoldedImages(container) {
     var clicked = 0;
-    // 查找"+N"展开元素（_picNum 是微博新版的折叠计数标签）
+    log('  expandFoldedImages: 开始查找折叠图片按钮...');
     var expandBtns = container.querySelectorAll(
       '[class*="picNum"], [class*="pic_num"], ' +
       '[class*="photo_more"], [class*="img_more"], [class*="pic_more"], ' +
@@ -146,17 +146,20 @@
     );
     for (var i = 0; i < expandBtns.length; i++) {
       if (expandBtns[i].offsetParent !== null) {
+        log('    点击展开: class=' + (expandBtns[i].className || '').substring(0, 50) + ' text=' + (expandBtns[i].textContent || '').substring(0, 10));
         try { expandBtns[i].click(); clicked++; } catch (e) {}
       }
     }
-    // 同时通过文本内容查找"+N"元素（不限于 first round）
+    // 同时通过文本内容查找"+N"元素
     var allSpans = container.querySelectorAll('span, div');
     for (var j = 0; j < allSpans.length; j++) {
       var t = (allSpans[j].textContent || '').trim();
       if (t && /^\+?\d+$/.test(t) && allSpans[j].offsetParent !== null) {
+        log('    点击 +N: text=' + t);
         try { allSpans[j].click(); clicked++; } catch (e) {}
       }
     }
+    log('  expandFoldedImages: 共点击 ' + clicked + ' 处');
     return clicked;
   }
 
@@ -190,11 +193,20 @@
 
     // 扫描 img 标签：检查 src + 所有可能存 GIF URL 的属性
     var imgs = container.querySelectorAll('img');
+    var skippedVideo = 0;
+    var skippedSmall = 0;
+    var skippedOther = 0;
+    log('  extractImages: 容器内共 ' + imgs.length + ' 个 img 标签');
+
     for (var i = 0; i < imgs.length; i++) {
       var img = imgs[i];
 
       // 跳过视频缩略图
-      if (isVideoThumbnail(img)) continue;
+      if (isVideoThumbnail(img)) {
+        skippedVideo++;
+        log('    跳过视频缩略图: ' + (img.src || '').substring(0, 80));
+        continue;
+      }
 
       // 尝试多个属性获取最佳 URL
       var candidateUrls = [
@@ -210,22 +222,34 @@
         var uu = candidateUrls[u];
         if (uu && uu.indexOf('sinaimg.cn') !== -1) {
           bestUrl = uu;
-          // 优先用 .gif 的 URL
           if (uu.toLowerCase().indexOf('.gif') !== -1) break;
         }
       }
 
-      if (!bestUrl || seen.has(bestUrl)) continue;
-      if (bestUrl.indexOf('h5.sinaimg.cn') !== -1 || bestUrl.indexOf('a.sinaimg.cn') !== -1) continue;
+      if (!bestUrl || seen.has(bestUrl)) {
+        if (!bestUrl) skippedOther++;
+        continue;
+      }
+      if (bestUrl.indexOf('h5.sinaimg.cn') !== -1 || bestUrl.indexOf('a.sinaimg.cn') !== -1) {
+        skippedOther++;
+        continue;
+      }
 
-      // 放宽尺寸限制：动图缩略图可能较小
       var w = img.naturalWidth || img.width || 0;
       var h = img.naturalHeight || img.height || 0;
       var isGif = bestUrl.toLowerCase().indexOf('.gif') !== -1;
-      if (!isGif && w > 0 && h > 0 && (w < 120 || h < 120)) continue;
-      if (img.closest('[class*="avatar"], [class*="Avatar"], [class*="emoji"], [class*="Emoji"]')) continue;
+      if (!isGif && w > 0 && h > 0 && (w < 120 || h < 120)) {
+        skippedSmall++;
+        log('    跳过小图 (' + w + 'x' + h + '): ' + bestUrl.substring(0, 80));
+        continue;
+      }
+      if (img.closest('[class*="avatar"], [class*="Avatar"], [class*="emoji"], [class*="Emoji"]')) {
+        skippedOther++;
+        continue;
+      }
 
       seen.add(bestUrl);
+      log('    提取: ' + (isGif ? '[GIF] ' : '[IMG] ') + bestUrl.substring(0, 90));
       images.push({
         original: toOriginalUrl(bestUrl),
         pageSrc: bestUrl,
@@ -235,11 +259,14 @@
 
     // 2. 扫描 video 标签（微博将 GIF 转 mp4，poster 是原始 GIF）
     var videos = container.querySelectorAll('video[class*="vertVideoImage"], video[poster*="sinaimg.cn"]');
+    log('  extractImages: 容器内共 ' + videos.length + ' 个 video 标签');
     for (var v = 0; v < videos.length; v++) {
       var poster = videos[v].getAttribute('poster');
       if (!poster || seen.has(poster)) continue;
       if (poster.indexOf('sinaimg.cn') === -1) continue;
 
+      var isPosterGif = poster.toLowerCase().indexOf('.gif') !== -1;
+      log('    提取 video poster: ' + (isPosterGif ? '[GIF] ' : '[IMG] ') + poster.substring(0, 90));
       seen.add(poster);
       images.push({
         original: toOriginalUrl(poster),
@@ -248,13 +275,14 @@
       });
     }
 
+    log('  extractImages 结果: ' + images.length + ' 张 (跳过视频缩略图' + skippedVideo + ', 小图' + skippedSmall + ', 其他' + skippedOther + ')');
     return images;
   }
 
   // 激活容器内的动图（点击播放按钮）
   function activateGifs(container) {
     var clicked = 0;
-    // 微博动图播放按钮常见 class / 属性
+    log('  activateGifs: 开始查找动图播放按钮...');
     var triggers = container.querySelectorAll(
       '[class*="play_gif"], [class*="playGif"], [class*="gif_play"], ' +
       '[class*="video_play"], [class*="gif-play"], [class*="GIF"],' +
@@ -264,9 +292,11 @@
     for (var i = 0; i < triggers.length; i++) {
       var t = triggers[i];
       if (t.offsetParent !== null && t.offsetWidth > 0) {
+        log('    激活动图: class=' + (t.className || '').substring(0, 50));
         try { t.click(); clicked++; } catch (e) {}
       }
     }
+    log('  activateGifs: 共激活 ' + clicked + ' 个');
     return clicked;
   }
 
@@ -740,7 +770,7 @@
   // ---- 初始化 ----
   function init() {
     createPanel();
-    log('微博原图下载器 v5.6.1 已加载');
+    log('微博原图下载器 v5.6.2-debug 已加载 (详细日志模式)');
     log('「下载全部」: 全页贴文原图，自动展开长文/折图/动图');
     log('「选择贴文」: 点选单条下载，滚动自动发现新贴文');
   }
