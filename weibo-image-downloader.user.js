@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         微博原图下载器
 // @namespace    https://github.com/sun27/weibo-image-downloader
-// @version      5.5.1
+// @version      5.6.0
 // @description  微博原图下载：按贴文/日期整理，自动展开长文折图动图，下载失败自动重试
 // @author       You
 // @match        https://weibo.com/*
@@ -137,25 +137,24 @@
   // 展开被折叠的图片（超过 9 张时微博只显示前 9 张）
   function expandFoldedImages(container) {
     var clicked = 0;
-    // 查找"+N"展开按钮或"查看全部"按钮
+    // 查找"+N"展开元素（_picNum 是微博新版的折叠计数标签）
     var expandBtns = container.querySelectorAll(
+      '[class*="picNum"], [class*="pic_num"], ' +
       '[class*="photo_more"], [class*="img_more"], [class*="pic_more"], ' +
       '[class*="fold_"], [class*="expand_pic"], [class*="show_all"], ' +
-      '[action-type="fl_pics"], [class*="pic_more"]'
+      '[action-type="fl_pics"]'
     );
     for (var i = 0; i < expandBtns.length; i++) {
-      if (expandBtns[i].offsetParent !== null && expandBtns[i].offsetWidth > 0) {
+      if (expandBtns[i].offsetParent !== null) {
         try { expandBtns[i].click(); clicked++; } catch (e) {}
       }
     }
-    // 也尝试找含"图"字的可见按钮
-    if (clicked === 0) {
-      var allBtns = container.querySelectorAll('a, span, div[class*="more"]');
-      for (var j = 0; j < allBtns.length; j++) {
-        var t = (allBtns[j].textContent || '').trim();
-        if (t && /^[+\d]+$/.test(t) && allBtns[j].offsetParent !== null) {
-          try { allBtns[j].click(); clicked++; } catch (e) {}
-        }
+    // 同时通过文本内容查找"+N"元素（不限于 first round）
+    var allSpans = container.querySelectorAll('span, div');
+    for (var j = 0; j < allSpans.length; j++) {
+      var t = (allSpans[j].textContent || '').trim();
+      if (t && /^\+?\d+$/.test(t) && allSpans[j].offsetParent !== null) {
+        try { allSpans[j].click(); clicked++; } catch (e) {}
       }
     }
     return clicked;
@@ -229,6 +228,21 @@
         original: toOriginalUrl(bestUrl),
         pageSrc: bestUrl,
         fileName: getFileName(bestUrl),
+      });
+    }
+
+    // 2. 扫描 video 标签（微博将 GIF 转 mp4，poster 是原始 GIF）
+    var videos = container.querySelectorAll('video[class*="vertVideoImage"], video[poster*="sinaimg.cn"]');
+    for (var v = 0; v < videos.length; v++) {
+      var poster = videos[v].getAttribute('poster');
+      if (!poster || seen.has(poster)) continue;
+      if (poster.indexOf('sinaimg.cn') === -1) continue;
+
+      seen.add(poster);
+      images.push({
+        original: toOriginalUrl(poster),
+        pageSrc: poster,
+        fileName: getFileName(poster),
       });
     }
 
@@ -456,7 +470,7 @@
     }
 
     // 图片展开/激活后等待加载
-    await sleep(2000);
+    await sleep(3500);
 
     // 重新扫描（此时动图 URL 已就绪）
     allImages = [];
@@ -496,8 +510,9 @@
 
     // 等待图片和动图加载
     if (expanded > 0 || imgExpanded > 0 || gifClicked > 0) {
-      log('等待图片加载...');
-      await sleep(2500);
+      var waitTime = imgExpanded > 0 ? 4000 : 2500;
+      log('等待图片加载... (' + waitTime/1000 + 's)');
+      await sleep(waitTime);
     }
 
     var date = getPostDate(container);
@@ -723,7 +738,7 @@
   // ---- 初始化 ----
   function init() {
     createPanel();
-    log('微博原图下载器 v5.5.0 已加载');
+    log('微博原图下载器 v5.6.0 已加载');
     log('「下载全部」: 全页贴文原图，自动展开长文/折图/动图');
     log('「选择贴文」: 点选单条下载，滚动自动发现新贴文');
   }
