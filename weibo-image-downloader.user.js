@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         微博原图下载器
 // @namespace    https://github.com/sun27/weibo-image-downloader
-// @version      5.6.3-debug
+// @version      5.6.4-debug
 // @description  微博原图下载：按贴文/日期整理，自动展开长文折图动图，下载失败自动重试
 // @author       You
 // @match        https://weibo.com/*
@@ -137,26 +137,16 @@
   // 展开被折叠的图片（超过 9 张时微博只显示前 9 张）
   function expandFoldedImages(container) {
     var clicked = 0;
-    log('  expandFoldedImages: 开始查找折叠图片按钮...');
+    log('  expandFoldedImages: 查找折叠图片按钮...');
+    // 只点击明确的折叠计数标签 _picNum（如 +9），不碰文本匹配（会误开查看器）
     var expandBtns = container.querySelectorAll(
       '[class*="picNum"], [class*="pic_num"], ' +
-      '[class*="photo_more"], [class*="img_more"], [class*="pic_more"], ' +
-      '[class*="fold_"], [class*="expand_pic"], [class*="show_all"], ' +
       '[action-type="fl_pics"]'
     );
     for (var i = 0; i < expandBtns.length; i++) {
       if (expandBtns[i].offsetParent !== null) {
-        log('    点击展开: class=' + (expandBtns[i].className || '').substring(0, 50) + ' text=' + (expandBtns[i].textContent || '').substring(0, 10));
+        log('    点击 _picNum: class=' + (expandBtns[i].className || '').substring(0, 50) + ' text=' + (expandBtns[i].textContent || '').substring(0, 10));
         try { expandBtns[i].click(); clicked++; } catch (e) {}
-      }
-    }
-    // 同时通过文本内容查找"+N"元素
-    var allSpans = container.querySelectorAll('span, div');
-    for (var j = 0; j < allSpans.length; j++) {
-      var t = (allSpans[j].textContent || '').trim();
-      if (t && /^\+?\d+$/.test(t) && allSpans[j].offsetParent !== null) {
-        log('    点击 +N: text=' + t);
-        try { allSpans[j].click(); clicked++; } catch (e) {}
       }
     }
     log('  expandFoldedImages: 共点击 ' + clicked + ' 处');
@@ -780,7 +770,7 @@
   // ---- 初始化 ----
   function init() {
     createPanel();
-    log('微博原图下载器 v5.6.3-debug 已加载 (详细日志模式)');
+    log('微博原图下载器 v5.6.4-debug 已加载 (详细日志模式)');
     log('「下载全部」: 全页贴文原图，自动展开长文/折图/动图');
     log('「选择贴文」: 点选单条下载，滚动自动发现新贴文');
   }
